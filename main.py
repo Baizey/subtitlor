@@ -43,19 +43,23 @@ def record():
         RATE = int(default_speakers["defaultSampleRate"])
         CHANNELS = int(default_speakers["maxInputChannels"])
 
+        next_counter = 0
+
         def callback(in_data, frame_count, time_info, status):
             global audio_queue
             global next_recording_done_time
             global next_recording_start_time
+            nonlocal next_counter
             current_time = time_info["current_time"]
 
             if current_time > next_recording_start_time:
-                active_recordings.append(bytearray())
+                active_recordings.append((int(next_counter), bytearray()))
+                next_counter += 1
                 next_recording_start_time = current_time + STEP_SIZE
                 if next_recording_done_time == 0:
                     next_recording_done_time = current_time + DURATION
 
-            for recording in active_recordings:
+            for _, recording in active_recordings:
                 recording.extend(in_data)
 
             if current_time > next_recording_done_time:
@@ -80,16 +84,19 @@ def record():
 def translate():
     global audio_queue
     whisper_rate = 16000  # hardcoded from whisper
+
+    last_counter = -1
     while True:
         while audio_queue.empty():
             time.sleep(0.01)
 
-        start_time = time.time()
+        counter, audio = audio_queue.get()
 
-        audio = audio_queue.get()
+        assert counter == last_counter + 1
+        last_counter = counter
 
         # Quick catchup for when the model stalls
-        if audio_queue.qsize() > 5:
+        if audio_queue.qsize() > 3:
             audio_queue.task_done()
             continue
 
@@ -105,11 +112,7 @@ def translate():
         result = model.transcribe(audio, task="translate", language="en")
         text = result["text"]
 
-        end_time = time.time()
-        diff = end_time - start_time
-        print(str(diff) + ": " + text)
-
-        subtitle_queue.put(text)
+        subtitle_queue.put((counter, text))
         audio_queue.task_done()
 
 
@@ -118,8 +121,14 @@ def update_label():
     all_words = []
     all_index = -1
 
+    last_counter = -1
     while True:
-        text = str(subtitle_queue.get())
+        counter, text = subtitle_queue.get()
+
+        assert counter >= last_counter + 1
+        last_counter = counter
+
+        print("item " + str(counter))
         striped = text.strip()
         words = striped.split(" ")
         if len(striped) == 0:
@@ -138,7 +147,7 @@ def update_label():
                     last_index = index_b
                     break
             if curr_index is not None:
-                all_index = all_index + last_index
+                all_index = last_index
                 all_words = all_words[:all_index] + words[curr_index:]
             elif curr_index is None:
                 all_index = len(all_words)
