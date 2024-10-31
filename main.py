@@ -14,23 +14,17 @@ audio_queue = queue.Queue()
 WORDS_PER_LINE = 8
 LINES = 5
 
-DURATION = 14
-STEP_SIZE = 1
-CHUNK_SIZE = 512
+DURATION = 14  # How long window it has back in time, in seconds
+STEP_SIZE = 1  # How often we update, in seconds
+
 CHANNELS = -1  # auto-detected
 RATE = -1  # auto-detected
-
-next_recording_done_time = 0
-next_recording_start_time = 0
+CHUNK_SIZE = -1  # auto based on rate
 
 
 def record():
     global audio_queue
-    global next_recording_done_time
-    global next_recording_start_time
-    global RATE
-    global CHANNELS
-    active_recordings = []
+    global DURATION, STEP_SIZE, RATE, CHANNELS, CHUNK_SIZE
     with pyaudio.PyAudio() as p:
         wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
         default_speakers = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
@@ -42,30 +36,22 @@ def record():
 
         RATE = int(default_speakers["defaultSampleRate"])
         CHANNELS = int(default_speakers["maxInputChannels"])
+        CHUNK_SIZE = int(RATE * STEP_SIZE)
 
+        buffer = bytearray()
+        max_buffer_size = DURATION * RATE * CHANNELS * 2
         next_counter = 0
 
         def callback(in_data, frame_count, time_info, status):
             global audio_queue
-            global next_recording_done_time
-            global next_recording_start_time
-            nonlocal next_counter
-            current_time = time_info["current_time"]
+            nonlocal next_counter, buffer, max_buffer_size
 
-            if current_time > next_recording_start_time:
-                active_recordings.append((int(next_counter), bytearray()))
-                next_counter += 1
-                next_recording_start_time = current_time + STEP_SIZE
-                if next_recording_done_time == 0:
-                    next_recording_done_time = current_time + DURATION
+            buffer.extend(in_data)
+            if len(buffer) > max_buffer_size:
+                buffer = buffer[-max_buffer_size:]
 
-            for _, recording in active_recordings:
-                recording.extend(in_data)
-
-            if current_time > next_recording_done_time:
-                next_recording_done_time = current_time + STEP_SIZE
-                done_buffer = active_recordings.pop(0)
-                audio_queue.put(done_buffer)
+            audio_queue.put((time.time(), bytearray(buffer)))
+            next_counter += 1
 
             return in_data, pyaudio.paContinue
 
@@ -83,17 +69,14 @@ def record():
 
 def translate():
     global audio_queue
+    global RATE, CHANNELS
     whisper_rate = 16000  # hardcoded from whisper
 
-    last_counter = -1
     while True:
         while audio_queue.empty():
             time.sleep(0.01)
 
-        counter, audio = audio_queue.get()
-
-        assert counter == last_counter + 1
-        last_counter = counter
+        timestamp, audio = audio_queue.get()
 
         # Quick catchup for when the model stalls
         if audio_queue.qsize() > 3:
@@ -112,23 +95,18 @@ def translate():
         result = model.transcribe(audio, task="translate", language="en")
         text = result["text"]
 
-        subtitle_queue.put((counter, text))
+        subtitle_queue.put((timestamp, text))
         audio_queue.task_done()
 
 
 def update_label():
-    global subtitle_queue
+    global subtitle_queue, STEP_SIZE, RATE, CHANNELS
     all_words = []
     all_index = -1
 
     last_counter = -1
     while True:
-        counter, text = subtitle_queue.get()
-
-        assert counter >= last_counter + 1
-        last_counter = counter
-
-        print("item " + str(counter))
+        timestamp, text = subtitle_queue.get()
         striped = text.strip()
         words = striped.split(" ")
         if len(striped) == 0:
@@ -164,6 +142,12 @@ def update_label():
 
         grouped = [" ".join(all_words[i:i + WORDS_PER_LINE]) for i in range(0, len(all_words), WORDS_PER_LINE)]
         line_text = "\n".join(grouped) + "\n" + ("_______" * WORDS_PER_LINE)
+
+        now = time.time()
+        delay = now - (timestamp - STEP_SIZE)
+        delay_str = f"{delay:.2f}"
+        print("delay: " + delay_str + " seconds")
+
         label.config(text=line_text)
         subtitle_queue.task_done()
 
