@@ -148,7 +148,7 @@ def update_label():
                     break
             if curr_index is not None:
                 all_index = last_index
-                all_words = all_words[:all_index] + words[curr_index:]
+                all_words = all_words[:last_index] + words[curr_index:]
             elif curr_index is None:
                 all_index = len(all_words)
                 all_words += words
