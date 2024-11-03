@@ -71,6 +71,7 @@ def translate():
     global audio_queue
     global RATE, CHANNELS
     whisper_rate = 16000  # hardcoded from whisper
+    whisper_channels = 1  # hardcoded from whisper
 
     while True:
         while audio_queue.empty():
@@ -83,13 +84,14 @@ def translate():
             audio_queue.task_done()
             continue
 
-        # Format sound buffer similar to what whisper do
+        # yeeted from whisper code on how it wants buffer formatted
         audio = numpy.frombuffer(audio, numpy.int16).flatten().astype(numpy.float32) / 32768.0
-        # Reduce to 1-channel input to be compatible with whisper
-        audio = audio.reshape(-1, CHANNELS)
-        audio = audio.mean(axis=1)
-        # Reduce to 16k hz to be compatible with whisper
-        audio = scipy.signal.resample(audio, int(len(audio) * whisper_rate / RATE))
+
+        if CHANNELS != whisper_channels:
+            audio = audio.reshape(-1, CHANNELS).mean(axis=1)
+
+        if RATE != whisper_rate:
+            audio = scipy.signal.resample(audio, int(len(audio) * whisper_rate / RATE))
 
         audio = whisper.pad_or_trim(audio)
         result = model.transcribe(audio, task="translate", language="en")
