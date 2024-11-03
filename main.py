@@ -40,18 +40,18 @@ def record():
 
         buffer = bytearray()
         max_buffer_size = DURATION * RATE * CHANNELS * 2
-        next_counter = 0
 
         def callback(in_data, frame_count, time_info, status):
             global audio_queue
-            nonlocal next_counter, buffer, max_buffer_size
+            nonlocal buffer, max_buffer_size
+
+            now = time.time()
 
             buffer.extend(in_data)
             if len(buffer) > max_buffer_size:
                 buffer = buffer[-max_buffer_size:]
 
-            audio_queue.put((time.time(), bytearray(buffer)))
-            next_counter += 1
+            audio_queue.put((now, bytearray(buffer)))
 
             return in_data, pyaudio.paContinue
 
@@ -104,7 +104,6 @@ def update_label():
     all_words = []
     all_index = -1
 
-    last_counter = -1
     while True:
         timestamp, text = subtitle_queue.get()
         striped = text.strip()
