@@ -11,8 +11,8 @@ model = whisper.load_model(name="large-v3-turbo", device="cuda")
 subtitle_queue = queue.Queue()
 audio_queue = queue.Queue()
 
-WORDS_PER_LINE = 8
-LINES = 5
+WORDS_PER_LINE = 16
+LINES = 8
 
 DURATION = 14  # How long window it has back in time, in seconds
 STEP_SIZE = 1  # How often we update, in seconds
@@ -141,8 +141,10 @@ def update_label():
             all_words = all_words[removing:]
             all_index -= removing
 
-        grouped = [" ".join(all_words[i:i + WORDS_PER_LINE]) for i in range(0, len(all_words), WORDS_PER_LINE)]
-        line_text = "\n".join(grouped) + "\n" + ("_______" * WORDS_PER_LINE)
+        max_chars_per_line = 95
+
+        grouped = [" ".join(all_words[i:i + WORDS_PER_LINE])[:max_chars_per_line] for i in range(0, len(all_words), WORDS_PER_LINE)]
+        line_text = "\n".join(grouped) + "\n" + ("_" * max_chars_per_line)
 
         now = time.time()
         delay = now - (timestamp - STEP_SIZE)
@@ -156,7 +158,7 @@ def update_label():
 root = tkinter.Tk()
 root.title("Subtitles")
 root.geometry("800x200")
-label = tkinter.Label(root, font=("Consolas", 24), fg="white", bg="black", justify="left")
+label = tkinter.Label(root, font=("Consolas", 14), fg="white", bg="black", justify="left")
 label.pack(expand=True, fill="both")
 
 threading.Thread(target=record, daemon=True).start()
