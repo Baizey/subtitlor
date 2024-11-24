@@ -7,7 +7,6 @@ import time
 import tkinter
 import pyaudiowpatch as pyaudio
 
-model = whisper.load_model(name="large-v3-turbo", device="cuda")
 subtitle_queue = queue.Queue()
 audio_queue = queue.Queue()
 
@@ -40,10 +39,11 @@ def record():
 
         buffer = bytearray()
         max_buffer_size = DURATION * RATE * CHANNELS * 2
+        i = 0
 
         def callback(in_data, frame_count, time_info, status):
             global audio_queue
-            nonlocal buffer, max_buffer_size
+            nonlocal buffer, max_buffer_size, i
 
             now = time.time()
 
@@ -51,7 +51,8 @@ def record():
             if len(buffer) > max_buffer_size:
                 buffer = buffer[-max_buffer_size:]
 
-            audio_queue.put((now, bytearray(buffer)))
+            audio_queue.put((i, now, bytearray(buffer)))
+            i += 1
 
             return in_data, pyaudio.paContinue
 
@@ -72,16 +73,18 @@ def translate():
     global RATE, CHANNELS
     whisper_rate = 16000  # hardcoded from whisper
     whisper_channels = 1  # hardcoded from whisper
+    model = whisper.load_model(name="large-v3-turbo", device="cuda")
 
     while True:
         while audio_queue.empty():
             time.sleep(0.01)
 
-        timestamp, audio = audio_queue.get()
+        i, timestamp, audio = audio_queue.get()
+        audio_queue.task_done()
 
         # Quick catchup for when the model stalls
         if audio_queue.qsize() > 3:
-            audio_queue.task_done()
+            subtitle_queue.put((i, None, None))
             continue
 
         # yeeted from whisper code on how it wants buffer formatted
@@ -97,8 +100,7 @@ def translate():
         result = model.transcribe(audio, task="translate", language="en")
         text = result["text"]
 
-        subtitle_queue.put((timestamp, text))
-        audio_queue.task_done()
+        subtitle_queue.put((i, timestamp, text))
 
 
 def update_label():
@@ -107,7 +109,12 @@ def update_label():
     all_index = -1
 
     while True:
-        timestamp, text = subtitle_queue.get()
+        i, timestamp, text = subtitle_queue.get()
+        subtitle_queue.task_done()
+        if timestamp is None:
+            print(str(i))
+            continue
+
         striped = text.strip()
         words = striped.split(" ")
         if len(striped) == 0:
@@ -141,18 +148,20 @@ def update_label():
             all_words = all_words[removing:]
             all_index -= removing
 
-        max_chars_per_line = 95
+        max_chars_per_line = 100
 
-        grouped = [" ".join(all_words[i:i + WORDS_PER_LINE])[:max_chars_per_line] for i in range(0, len(all_words), WORDS_PER_LINE)]
+        grouped = [" ".join(all_words[i:i + WORDS_PER_LINE])[:max_chars_per_line] for i in
+                   range(0, len(all_words), WORDS_PER_LINE)]
         line_text = "\n".join(grouped) + "\n" + ("_" * max_chars_per_line)
 
         now = time.time()
         delay = now - (timestamp - STEP_SIZE)
         delay_str = f"{delay:.2f}"
-        print("delay: " + delay_str + " seconds")
+        current_time = timestamp % 10.0
+        formatted_time = f"{current_time:.2f}"
+        print(formatted_time + " " + str(i) + " delay: " + delay_str + " seconds || " + text)
 
         label.config(text=line_text)
-        subtitle_queue.task_done()
 
 
 root = tkinter.Tk()
@@ -161,9 +170,9 @@ root.geometry("800x200")
 label = tkinter.Label(root, font=("Consolas", 14), fg="white", bg="black", justify="left")
 label.pack(expand=True, fill="both")
 
-threading.Thread(target=record, daemon=True).start()
-threading.Thread(target=translate, daemon=True).start()
-threading.Thread(target=update_label, daemon=True).start()
+threading.Thread(target=record).start()
+threading.Thread(target=translate).start()
+threading.Thread(target=update_label).start()
 
 root.mainloop()
 
